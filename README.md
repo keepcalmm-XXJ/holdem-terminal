@@ -19,7 +19,7 @@ HOLDEM_HOST=0.0.0.0 HOLDEM_ALLOWED_HOSTS=<房主局域网 IP> npm start
 
 ```sh
 npm ci --omit=dev
-npm run tui -- --url http://<房主局域网 IP>:4318
+HOLDEM_ALLOW_INSECURE_LAN=1 npm run tui -- --url http://<房主局域网 IP>:4318
 ```
 
 进入后输入 `create <昵称>` 创建房间，或 `join <房间号> <昵称>` 加入房间；输入 `help` 查看完整命令。

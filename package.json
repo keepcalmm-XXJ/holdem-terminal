@@ -1,0 +1,29 @@
+{
+  "name": "holdem-terminal",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "holdem": "./bin/holdem.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server/http.mjs",
+    "tui": "node bin/holdem.mjs",
+    "update": "node scripts/update.mjs",
+    "install-auto-update": "node scripts/install-auto-update.mjs",
+    "test": "node --test test/*.test.mjs",
+    "format": "prettier --write bin server test scripts package.json README.md",
+    "check": "prettier --check bin server test scripts package.json README.md"
+  },
+  "dependencies": {
+    "poker-ts": "1.5.0",
+    "ws": "8.21.3",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "prettier": "3.9.7"
+  }
+}

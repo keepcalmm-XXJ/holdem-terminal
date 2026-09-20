@@ -4,25 +4,40 @@
 
 需要 Node.js 22 或更高版本。
 
-## 启动牌桌服务
+## 本机快速开始
 
-在一台作为房主的电脑上：
+在同一台电脑的两个终端窗口中执行：
 
 ```sh
+# 窗口 1：启动服务（默认仅本机可访问）
 npm ci
-HOLDEM_HOST=0.0.0.0 HOLDEM_ALLOWED_HOSTS=<房主局域网 IP> npm start
+npm start
+
+# 窗口 2：进入牌桌
+npm run tui
 ```
 
-房主通过 `ipconfig getifaddr en0` 查看局域网 IP；例如 `192.168.1.20`。其他玩家连接时使用这个地址。
+终端客户端默认连接 `http://127.0.0.1:4318`。输入 `create <昵称>` 创建房间，或 `join <房间号> <昵称>` 加入房间；输入 `help` 查看完整命令。
 
-## 终端加入牌局
+## 局域网多人
+
+在房主电脑启动服务时，显式监听局域网地址：
 
 ```sh
+LAN_IP=$(ipconfig getifaddr en0)
+HOLDEM_HOST=0.0.0.0 HOLDEM_ALLOWED_HOSTS=$LAN_IP npm start
+```
+
+房主可用 `echo $LAN_IP` 查看要分享给其他人的地址。朋友首次安装：
+
+```sh
+git clone https://github.com/keepcalmm-XXJ/holdem-terminal.git
+cd holdem-terminal
 npm ci --omit=dev
 HOLDEM_ALLOW_INSECURE_LAN=1 npm run tui -- --url http://<房主局域网 IP>:4318
 ```
 
-进入后输入 `create <昵称>` 创建房间，或 `join <房间号> <昵称>` 加入房间；输入 `help` 查看完整命令。
+`HOLDEM_ALLOW_INSECURE_LAN=1` 只应在可信局域网中使用。
 
 ## 自动更新（macOS）
 
@@ -32,7 +47,14 @@ HOLDEM_ALLOW_INSECURE_LAN=1 npm run tui -- --url http://<房主局域网 IP>:431
 npm run install-auto-update
 ```
 
-它会创建当前用户的 LaunchAgent，每小时执行一次 `git pull --ff-only` 和依赖同步。更新会在下次启动终端客户端或重启服务时生效。
+它会创建当前用户的 LaunchAgent，每小时执行一次 `git pull --ff-only`；发现新版本时才同步依赖。更新会在下次启动终端客户端或重启服务时生效。
+
+关闭自动更新：
+
+```sh
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.holdem-terminal.update.plist
+rm ~/Library/LaunchAgents/com.holdem-terminal.update.plist
+```
 
 也可以随时手动更新：
 

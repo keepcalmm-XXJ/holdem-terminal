@@ -3,7 +3,7 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 
-export const DEFAULT_LAN_SERVER_URL = "http://10.54.26.209:4318";
+export const DEFAULT_LAN_SERVER_URL = "http://127.0.0.1:4318";
 
 export function serverUrlFromEnv(env = process.env) {
   const base = new URL(env.HOLDEM_SERVER_URL || DEFAULT_LAN_SERVER_URL);

@@ -23,7 +23,7 @@ const help = `命令：
   clear | help | quit
 
 环境变量：
-  HOLDEM_SERVER_URL          服务地址，默认 ${"http://10.54.26.209:4318"}
+  HOLDEM_SERVER_URL          服务地址，默认 ${"http://127.0.0.1:4318"}
   HOLDEM_ALLOW_INSECURE_LAN=1  使用其他可信 LAN 的明文 HTTP 地址
   HOLDEM_TUI_STATE_PATH      自定义本机终端会话保存位置
   HOLDEM_TUI_THEME           dark（默认）或 light（白色终端）

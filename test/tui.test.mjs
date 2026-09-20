@@ -13,8 +13,8 @@ import {
   TerminalSession,
 } from "../bin/holdem-lib.mjs";
 
-test("terminal defaults to the trusted LAN server and rejects other HTTP servers", () => {
-  assert.equal(serverUrlFromEnv({}).origin, "http://10.54.26.209:4318");
+test("terminal defaults to localhost and rejects other HTTP servers", () => {
+  assert.equal(serverUrlFromEnv({}).origin, "http://127.0.0.1:4318");
   assert.throws(
     () => serverUrlFromEnv({ HOLDEM_SERVER_URL: "http://10.0.0.8:4318" }),
     /HOLDEM_ALLOW_INSECURE_LAN/,

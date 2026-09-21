@@ -128,6 +128,15 @@ test("terminal dashboard uses aligned seats, poker positions and structured acti
         action: { action: "raise", amount: 60, at: Date.now() },
       },
     ],
+    chat: [
+      {
+        id: "chat",
+        at: Date.now(),
+        seat: 1,
+        name: "Bob",
+        text: "这手我跟。",
+      },
+    ],
   };
   assert.deepEqual(
     [...tablePositions(state)],
@@ -159,7 +168,7 @@ test("terminal dashboard uses aligned seats, poker positions and structured acti
     /公共牌\s+A\s+10\s+7\s*\n\s+♠︎?\s+♥\s+♦︎?\s*\n\n你的底牌\s+K\s+Q\s*\n\s+♣︎?\s+♠︎?/s,
   );
   assert.doesNotMatch(output, /♥︎/);
-  assert.match(output, /动态.*Alice.*加注至 60/s);
+  assert.match(output, /动态.*聊天.*Alice.*加注至 60.*Bob：这手我跟。/s);
   assert.doesNotMatch(output, /[┌┬┴│]/);
   assert.match(output, /等待 Bob 行动/s);
   const showdownOutput = formatTable(
@@ -204,6 +213,8 @@ test("terminal dashboard uses aligned seats, poker positions and structured acti
   const light = formatTable(state, { theme: "light", columns: 140 });
   assert.match(light, /\x1b\[1;97;40m\s*♠︎?/);
   assert.match(light, /\x1b\[1;97;44m\s*♣︎?/);
+  const narrow = formatTable(state, { columns: 100 });
+  assert.match(narrow, /动态.*Alice.*加注至 60.*聊天.*Bob：这手我跟。/s);
 });
 
 test("terminal session saves a private reusable identity", async () => {

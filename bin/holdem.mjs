@@ -20,6 +20,7 @@ const help = `命令：
   fold | check | call | allin
   bet <总下注目标> | raise <总下注目标>
   rebuy | leave
+  say <内容>                发送房间聊天
   clear | help | quit
 
 环境变量：
@@ -215,6 +216,10 @@ async function handle(line) {
   if (command === "sit" || command === "up") return mutate("resume_seat");
   if (command === "rebuy") return mutate("rebuy");
   if (command === "leave") return mutate("leave_room");
+  if (command === "say") {
+    if (!args.length) throw new Error("用法：say <聊天内容>");
+    return mutate("send_chat", { text: args.join(" ") });
+  }
   if (command === "host") {
     const seat = Number(args[0]);
     if (!Number.isInteger(seat) || seat < 1 || seat > 6)

@@ -254,6 +254,38 @@ function turnCommands(legal) {
   });
 }
 
+function timestamp(at) {
+  return new Date(at).toLocaleTimeString("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
+function sideBySide(
+  leftTitle,
+  leftRows,
+  rightTitle,
+  rightRows,
+  columns,
+  theme,
+) {
+  const gap = "    ";
+  const available = Number.isFinite(columns) ? columns : 120;
+  const leftWidth = Math.floor((available - displayWidth(gap)) / 2);
+  const rightWidth = available - displayWidth(gap) - leftWidth;
+  const left = [leftTitle, ...(leftRows.length ? leftRows : ["暂无动态"])];
+  const right = [rightTitle, ...(rightRows.length ? rightRows : ["暂无聊天"])];
+  const count = Math.max(left.length, right.length);
+  return Array.from({ length: count }, (_, index) => {
+    const leftCell = cell(left[index] || "", leftWidth);
+    const rightCell = cell(right[index] || "", rightWidth);
+    if (index === 0)
+      return `${accent(leftCell, theme)}${gap}${accent(rightCell, theme)}`;
+    return `${leftCell}${gap}${rightCell}`;
+  });
+}
+
 export function formatTable(state, { theme = false, columns = Infinity } = {}) {
   if (!state?.room) {
     return [
@@ -408,21 +440,34 @@ export function formatTable(state, { theme = false, columns = Infinity } = {}) {
     .filter((event) => event.action)
     .slice(-4)
     .reverse();
-  if (activity.length) {
-    lines.push("", accent("动态", theme));
-    for (const event of activity) {
-      const player = state.players?.find((entry) => entry.seat === event.seat);
-      const time = new Date(event.at).toLocaleTimeString("zh-CN", {
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false,
-      });
-      lines.push(
-        `${dim(time, theme)}  ${cleanTerminalText(player?.name || "玩家")}  ${actionText(event.action)}`,
-      );
-    }
+  const activityRows = activity.map((event) => {
+    const player = state.players?.find((entry) => entry.seat === event.seat);
+    return `${timestamp(event.at)}  ${cleanTerminalText(player?.name || "玩家")}  ${actionText(event.action)}`;
+  });
+  const chatRows = (state.chat || []).slice(-4).map((message) => {
+    const name = cleanTerminalText(message.name || `座位 ${message.seat + 1}`);
+    return `${timestamp(message.at)}  ${name}：${cleanTerminalText(message.text)}`;
+  });
+  if (columns >= 112) {
+    lines.push(
+      "",
+      ...sideBySide("动态", activityRows, "聊天", chatRows, columns, theme),
+    );
+  } else {
+    lines.push("", accent("动态", theme), ...activityRows);
+    lines.push(
+      "",
+      accent("聊天", theme),
+      ...(chatRows.length ? chatRows : [dim("暂无聊天", theme)]),
+    );
   }
-  lines.push("", dim("help 查看命令  ·  status 刷新  ·  quit 退出", theme));
+  lines.push(
+    "",
+    dim(
+      "say <内容> 聊天  ·  help 查看命令  ·  status 刷新  ·  quit 退出",
+      theme,
+    ),
+  );
   return lines.join("\n");
 }
 

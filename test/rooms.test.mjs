@@ -46,6 +46,41 @@ test("room membership and host authorization; no arbitrary seat impersonation", 
   );
 });
 
+test("room chat is shared, bounded, rate limited, and survives state recovery", () => {
+  let now = 1000;
+  const g = setup(2, { now: () => now });
+  const first = g.run(0, "send_chat", { text: "  这手好运  " });
+  assert.deepEqual(first.chat, [
+    {
+      id: first.chat[0].id,
+      at: now,
+      seat: 0,
+      name: "Alice",
+      text: "这手好运",
+    },
+  ]);
+  assert.deepEqual(g.view(1).chat, first.chat);
+  assert.throws(() => g.run(0, "send_chat", { text: "太快了" }), /发言过快/);
+  now += 1000;
+  assert.throws(() => g.run(1, "send_chat", { text: " \n " }), /可见字符/);
+  assert.throws(
+    () => g.run(1, "send_chat", { text: "a".repeat(201) }),
+    /可见字符/,
+  );
+  for (let index = 0; index < 51; index += 1) {
+    now += 1000;
+    g.run(index % 2, "send_chat", { text: `消息 ${index}` });
+  }
+  assert.equal(g.view().chat.length, 50);
+  assert.equal(g.view().chat[0].text, "消息 1");
+
+  const restored = new RoomStore({ now: () => now });
+  restored.restoreState(g.store.exportState());
+  const restoredSnapshot = restored.execute(g.tokens[1], "get_table_state");
+  assert.equal(restoredSnapshot.chat.length, 50);
+  assert.equal(restoredSnapshot.chat.at(-1).text, "消息 50");
+});
+
 test("private cards, snapshots and events never expose other private cards", () => {
   const g = setup(6);
   g.start();

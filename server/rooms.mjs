@@ -24,6 +24,16 @@ function nickname(value) {
   return name;
 }
 
+function chatMessage(value) {
+  requireValue(typeof value === "string", "请输入聊天内容");
+  const text = value.trim();
+  requireValue(
+    text.length >= 1 && text.length <= 200 && !/[\p{C}]/u.test(text),
+    "聊天内容需为 1–200 个可见字符",
+  );
+  return text;
+}
+
 const digest = (value) =>
   createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
@@ -46,6 +56,7 @@ export class RoomStore extends EventEmitter {
     this.inviteBaseUrl = inviteBaseUrl;
     this.sessions = new Map();
     this.rooms = new Map();
+    this.chatTimes = new Map();
     this.depth = 0;
     this.dirty = false;
     this.notify = false;
@@ -142,6 +153,8 @@ export class RoomStore extends EventEmitter {
           value.history.length <= 10 &&
           Array.isArray(value.events) &&
           value.events.length <= 60 &&
+          Array.isArray(value.chat ?? []) &&
+          (value.chat?.length ?? 0) <= 50 &&
           Array.isArray(value.members) &&
           value.members.length > 0 &&
           value.members.length <= 6,
@@ -149,6 +162,26 @@ export class RoomStore extends EventEmitter {
         503,
       );
       const { engine, ...room } = value;
+      room.chat ??= [];
+      for (const message of room.chat) {
+        requireValue(
+          typeof message.id === "string" &&
+            Number.isFinite(message.at) &&
+            Number.isInteger(message.seat) &&
+            message.seat >= 0 &&
+            message.seat < 6 &&
+            typeof message.name === "string" &&
+            message.name.length >= 1 &&
+            message.name.length <= 20 &&
+            !/[\p{C}]/u.test(message.name) &&
+            typeof message.text === "string" &&
+            message.text.length >= 1 &&
+            message.text.length <= 200 &&
+            !/[\p{C}]/u.test(message.text),
+          "保存的聊天记录无效",
+          503,
+        );
+      }
       const restored = HoldemEngine.fromState(engine);
       const seats = restored.publicState().seats;
       const ids = new Set();
@@ -207,6 +240,7 @@ export class RoomStore extends EventEmitter {
       );
     this.rooms = rooms;
     this.sessions = sessions;
+    this.chatTimes.clear();
   }
 
   transaction(operation) {
@@ -469,6 +503,7 @@ export class RoomStore extends EventEmitter {
       deadline: room.deadline,
       serverTime: this.now(),
       events: room.events,
+      chat: room.chat,
       history: room.history,
     };
   }
@@ -544,6 +579,7 @@ export class RoomStore extends EventEmitter {
         updatedAt: this.now(),
         events: [],
         history: [],
+        chat: [],
       };
       this.rooms.set(code, room);
       this.dirty = this.notify = true;
@@ -614,6 +650,26 @@ export class RoomStore extends EventEmitter {
       switch (operation) {
         case "get_table_state":
           break;
+        case "send_chat": {
+          const text = chatMessage(input.text);
+          const now = this.now();
+          requireValue(
+            now - (this.chatTimes.get(session.id) ?? -Infinity) >= 1000,
+            "发言过快，请稍后再试",
+            429,
+          );
+          this.chatTimes.set(session.id, now);
+          room.chat.push({
+            id: randomUUID(),
+            at: now,
+            seat: me.seat,
+            name: me.name,
+            text,
+          });
+          if (room.chat.length > 50) room.chat.shift();
+          this.changed(room, false);
+          break;
+        }
         case "set_ready":
           requireValue(!state.inProgress, "请等待本手结束");
           requireValue(!me.away, "请先恢复入座");

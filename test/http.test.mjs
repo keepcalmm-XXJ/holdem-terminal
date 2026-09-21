@@ -4,6 +4,7 @@ import { once } from "node:events";
 import { randomUUID } from "node:crypto";
 import { createGameServer } from "../server/http.mjs";
 import { request as httpRequest } from "node:http";
+import { RoomStore } from "../server/rooms.mjs";
 
 test("HTTP sessions, origin checks, authorization and concurrent state conflicts", async (t) => {
   const server = createGameServer();
@@ -79,4 +80,60 @@ test("HTTP sessions, origin checks, authorization and concurrent state conflicts
   assert.equal(await page.text(), "Holdem Terminal Server\n");
   assert.equal((await fetch(`${base}/package.json`)).status, 404);
   assert.equal((await post("session", { huge: "x".repeat(9000) })).status, 413);
+});
+
+test("HTTP uncertain commit returns 503 with a stable code on first and subsequent requests", async (t) => {
+  const store = new RoomStore();
+  const token = store.createSession().token;
+  const room = store.execute(token, "create_room", {
+    requestId: randomUUID(),
+    name: "Alice",
+  }).room;
+  let saves = 0;
+  let changes = 0;
+  store.on("change", () => changes++);
+  store.storage = {
+    save() {
+      saves++;
+      throw Object.assign(new Error("commit uncertain"), {
+        committed: true,
+        code: "COMMIT_UNCERTAIN",
+      });
+    },
+    close() {},
+  };
+  const server = createGameServer({ store });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const input = { requestId: randomUUID(), text: "hello" };
+  const post = () =>
+    fetch(`${base}/api/send_chat`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(input),
+    });
+  const first = await post();
+  assert.equal(first.status, 503);
+  assert.deepEqual(await first.json(), {
+    code: "COMMIT_UNCERTAIN",
+    error: "commit uncertain",
+  });
+  assert.equal(store.storageFault, true);
+  assert.equal(store.rooms.get(room).chat.length, 1);
+  assert.equal(changes, 0);
+  const retry = await post();
+  assert.equal(retry.status, 503);
+  assert.equal((await retry.json()).code, "STORAGE_FAULT");
+  assert.equal(saves, 1);
+  const health = await fetch(`${base}/health`);
+  assert.equal(health.status, 503);
+  assert.equal((await health.json()).code, "STORAGE_FAULT");
 });

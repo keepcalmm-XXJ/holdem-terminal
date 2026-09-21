@@ -4,9 +4,10 @@ import { HoldemEngine } from "./engine.mjs";
 import { SnapshotFile } from "./storage.mjs";
 
 export class GameError extends Error {
-  constructor(message, status = 400) {
+  constructor(message, status = 400, code) {
     super(message);
     this.status = status;
+    if (code) this.code = code;
   }
 }
 
@@ -146,6 +147,9 @@ export class RoomStore extends EventEmitter {
           !rooms.has(value.code) &&
           Number.isSafeInteger(value.revision) &&
           value.revision >= 1 &&
+          (value.chatRevision === undefined ||
+            (Number.isSafeInteger(value.chatRevision) &&
+              value.chatRevision >= 0)) &&
           Number.isSafeInteger(value.hand) &&
           value.hand >= 0 &&
           Number.isFinite(value.updatedAt) &&
@@ -163,6 +167,7 @@ export class RoomStore extends EventEmitter {
       );
       const { engine, ...room } = value;
       room.chat ??= [];
+      room.chatRevision ??= 0;
       for (const message of room.chat) {
         requireValue(
           typeof message.id === "string" &&
@@ -244,11 +249,12 @@ export class RoomStore extends EventEmitter {
   }
 
   transaction(operation) {
-    requireValue(
-      !this.storageFault,
-      "存储提交状态不确定，请重启服务恢复牌局",
-      503,
-    );
+    if (this.storageFault)
+      throw new GameError(
+        "存储提交状态不确定，请重启服务恢复牌局",
+        503,
+        "STORAGE_FAULT",
+      );
     if (this.depth) return operation();
     const before = this.storage ? this.exportState() : null;
     this.depth = 1;
@@ -264,6 +270,8 @@ export class RoomStore extends EventEmitter {
       this.depth = 0;
       if (error.committed) {
         this.storageFault = true;
+        error.status = 503;
+        error.code = "COMMIT_UNCERTAIN";
         this.emit("storage-error");
       } else if (before) {
         this.restoreState(before);
@@ -329,7 +337,14 @@ export class RoomStore extends EventEmitter {
   }
 
   log(room, text, detail = {}) {
-    room.events.push({ id: randomUUID(), at: this.now(), text, ...detail });
+    room.events.push({
+      id: randomUUID(),
+      at: this.now(),
+      hand: room.hand,
+      phase: room.engine.publicState().phase,
+      text,
+      ...detail,
+    });
     if (room.events.length > 60) room.events.shift();
   }
 
@@ -422,11 +437,18 @@ export class RoomStore extends EventEmitter {
         amount: null,
         at: this.now(),
         timeout: true,
+        hand: room.hand,
+        phase: state.phase,
       };
       this.log(
         room,
         `${player.name} 超时${action === "check" ? "过牌" : "弃牌"}`,
-        { seat: player.seat, action: player.lastAction },
+        {
+          seat: player.seat,
+          name: player.name,
+          phase: state.phase,
+          action: player.lastAction,
+        },
       );
       this.changed(room);
     }
@@ -479,6 +501,7 @@ export class RoomStore extends EventEmitter {
     return {
       room: room.code,
       revision: room.revision,
+      chatRevision: room.chatRevision,
       hand: room.hand,
       host: room.host,
       me: me.seat,
@@ -573,6 +596,7 @@ export class RoomStore extends EventEmitter {
         ],
         showdownOnSeats: false,
         revision: 1,
+        chatRevision: 0,
         hand: 0,
         completedHand: 0,
         deadline: null,
@@ -667,7 +691,9 @@ export class RoomStore extends EventEmitter {
             text,
           });
           if (room.chat.length > 50) room.chat.shift();
-          this.changed(room, false);
+          room.chatRevision += 1;
+          room.updatedAt = now;
+          this.dirty = this.notify = true;
           break;
         }
         case "set_ready":
@@ -747,11 +773,18 @@ export class RoomStore extends EventEmitter {
             action: input.action,
             amount: actionAmount,
             at: this.now(),
+            hand: room.hand,
+            phase: state.phase,
           };
           this.log(
             room,
             `${me.name} ${input.action}${input.amount === undefined ? "" : ` ${input.amount}`}`,
-            { seat: me.seat, action: me.lastAction },
+            {
+              seat: me.seat,
+              name: me.name,
+              phase: state.phase,
+              action: me.lastAction,
+            },
           );
           this.changed(room);
           break;

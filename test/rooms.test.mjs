@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { RoomStore } from "../server/rooms.mjs";
 
 function setup(count = 2, options) {
@@ -49,6 +49,7 @@ test("room membership and host authorization; no arbitrary seat impersonation", 
 test("room chat is shared, bounded, rate limited, and survives state recovery", () => {
   let now = 1000;
   const g = setup(2, { now: () => now });
+  assert.equal(g.view().chatRevision, 0);
   const first = g.run(0, "send_chat", { text: "  这手好运  " });
   assert.deepEqual(first.chat, [
     {
@@ -72,6 +73,7 @@ test("room chat is shared, bounded, rate limited, and survives state recovery", 
     g.run(index % 2, "send_chat", { text: `消息 ${index}` });
   }
   assert.equal(g.view().chat.length, 50);
+  assert.equal(g.view().chatRevision, 52);
   assert.equal(g.view().chat[0].text, "消息 1");
 
   const restored = new RoomStore({ now: () => now });
@@ -79,6 +81,168 @@ test("room chat is shared, bounded, rate limited, and survives state recovery", 
   const restoredSnapshot = restored.execute(g.tokens[1], "get_table_state");
   assert.equal(restoredSnapshot.chat.length, 50);
   assert.equal(restoredSnapshot.chat.at(-1).text, "消息 50");
+  assert.equal(restoredSnapshot.chatRevision, 52);
+  assert.equal(
+    restored.execute(g.tokens[0], "send_chat", {
+      requestId: randomUUID(),
+      text: "after recovery",
+    }).chatRevision,
+    53,
+  );
+});
+
+test("chat racing with a legal action preserves its revision and deadline", () => {
+  let now = 1000;
+  const g = setup(2, { now: () => now, turnMs: 1000 });
+  g.start();
+  const before = g.view(g.view().actor);
+  assert.ok(before.legal.actions.includes("call"));
+  let changes = 0;
+  g.store.on("change", () => changes++);
+  now = before.deadline - 1;
+  const chat = g.run(1 - before.actor, "send_chat", { text: "hello" });
+  assert.equal(chat.revision, before.revision);
+  assert.equal(chat.chatRevision, before.chatRevision + 1);
+  assert.equal(chat.deadline, before.deadline);
+  assert.equal(g.store.rooms.get(g.room).updatedAt, now);
+  assert.equal(g.store.dirty, true);
+  assert.equal(changes, 1);
+  const action = g.store.execute(g.tokens[before.actor], "player_action", {
+    requestId: randomUUID(),
+    revision: before.revision,
+    action: "call",
+  });
+  assert.equal(action.revision, before.revision + 1);
+  assert.equal(action.chatRevision, chat.chatRevision);
+  assert.equal(action.players[before.actor].lastAction.action, "call");
+});
+
+test("chat and its identical retry do not postpone a timeout or mutate twice", () => {
+  let now = 1000;
+  const g = setup(2, { now: () => now, turnMs: 1000 });
+  g.start();
+  const before = g.view();
+  now = before.deadline - 1;
+  const input = { requestId: randomUUID(), text: "hello" };
+  const token = g.tokens[1 - before.actor];
+  let changes = 0;
+  g.store.on("change", () => changes++);
+  const first = g.store.execute(token, "send_chat", input);
+  assert.deepEqual(g.store.execute(token, "send_chat", input), first);
+  assert.equal(changes, 1);
+  assert.equal(g.view().chat.length, 1);
+  assert.equal(g.view().chatRevision, 1);
+  assert.equal(g.view().deadline, before.deadline);
+  assert.throws(
+    () => g.store.execute(token, "send_chat", { ...input, text: "changed" }),
+    { status: 409 },
+  );
+  const restored = new RoomStore({ now: () => now });
+  restored.restoreState(g.store.exportState());
+  assert.deepEqual(restored.execute(token, "send_chat", input), first);
+  assert.equal(restored.execute(token, "get_table_state").chatRevision, 1);
+  now = before.deadline;
+  g.store.tick();
+  const after = g.view();
+  assert.equal(after.players[before.actor].lastAction.timeout, true);
+  assert.equal(after.players[before.actor].lastAction.action, "fold");
+  assert.equal(after.players[before.actor].lastAction.hand, before.hand);
+  assert.equal(after.players[before.actor].lastAction.phase, before.phase);
+  const event = after.events.at(-2);
+  assert.equal(event.hand, before.hand);
+  assert.equal(event.phase, before.phase);
+  assert.equal(event.name, before.players[before.actor].name);
+  assert.equal(after.events.at(-1).phase, "complete");
+});
+
+test("old snapshots default chatRevision without inventing event or action provenance", () => {
+  const g = setup();
+  g.start();
+  g.run(g.view().actor, "player_action", { action: "call" });
+  const saved = g.store.exportState();
+  delete saved.checksum;
+  for (const room of saved.rooms) {
+    delete room.chatRevision;
+    delete room.chat;
+    for (const event of room.events) {
+      delete event.hand;
+      delete event.phase;
+      delete event.name;
+      if (event.action) {
+        delete event.action.hand;
+        delete event.action.phase;
+      }
+    }
+    for (const member of room.members) {
+      if (!member.lastAction) continue;
+      delete member.lastAction.hand;
+      delete member.lastAction.phase;
+    }
+  }
+  saved.checksum = createHash("sha256")
+    .update(JSON.stringify(saved))
+    .digest("hex");
+  const restored = new RoomStore();
+  restored.restoreState(saved);
+  const state = restored.execute(g.tokens[0], "get_table_state");
+  assert.equal(state.chatRevision, 0);
+  assert.deepEqual(state.chat, []);
+  assert.deepEqual(state.events, saved.rooms[0].events);
+  assert.deepEqual(
+    state.players.map((player) => player.lastAction),
+    saved.rooms[0].members.map((member) => member.lastAction),
+  );
+  const chat = restored.execute(g.tokens[0], "send_chat", {
+    requestId: randomUUID(),
+    text: "new",
+  });
+  assert.equal(chat.chatRevision, 1);
+  assert.equal(chat.revision, state.revision);
+});
+
+test("action provenance survives street changes, new hands and seat reuse", () => {
+  const g = setup();
+  g.start();
+  const preflop = g.view();
+  g.run(preflop.actor, "player_action", { action: "call" });
+  const closingActor = g.view().actor;
+  const flop = g.run(closingActor, "player_action", { action: "check" });
+  assert.equal(flop.phase, "flop");
+  const event = flop.events.at(-1);
+  assert.equal(event.hand, preflop.hand);
+  assert.equal(event.phase, preflop.phase);
+  assert.equal(event.name, preflop.players[closingActor].name);
+  assert.equal(event.action.hand, preflop.hand);
+  assert.equal(event.action.phase, preflop.phase);
+  assert.deepEqual(flop.players[closingActor].lastAction, event.action);
+  assert.notEqual(flop.players[closingActor].lastAction.phase, flop.phase);
+  const folded = g.run(flop.actor, "player_action", { action: "fold" });
+  assert.equal(folded.events.at(-2).phase, "flop");
+  assert.equal(folded.events.at(-1).phase, "complete");
+  g.run(closingActor, "leave_room");
+  const replacement = g.run(closingActor, "join_room", {
+    room: g.room,
+    name: "Replacement",
+  });
+  assert.equal(replacement.me, closingActor);
+  assert.equal(replacement.players[closingActor].lastAction, null);
+  assert.deepEqual(
+    replacement.events.find((e) => e.id === event.id),
+    event,
+  );
+  const next = g.start();
+  assert.equal(next.hand, preflop.hand + 1);
+  assert.ok(next.players.every((player) => player.lastAction === null));
+  assert.equal(next.events.at(-1).hand, next.hand);
+  assert.deepEqual(
+    next.events.find((e) => e.id === event.id),
+    event,
+  );
+  for (const token of g.tokens) {
+    const publicState = JSON.stringify(next);
+    assert.equal(publicState.includes(token), false);
+    assert.equal(publicState.includes(g.store.sessions.get(token).id), false);
+  }
 });
 
 test("private cards, snapshots and events never expose other private cards", () => {
@@ -185,10 +349,21 @@ test("timeout checks when free, and a replaced seat does not inherit folded stat
   const g = setup(2, { now: () => now, turnMs: 1000 });
   g.start();
   g.run(g.view().actor, "player_action", { action: "call" });
+  const beforeTimeout = g.view();
   now += 1001;
   g.store.tick();
   assert.equal(g.view().phase, "flop");
   assert.match(g.view().events.at(-1).text, /超时过牌/);
+  assert.equal(g.view().events.at(-1).phase, beforeTimeout.phase);
+  assert.equal(g.view().events.at(-1).hand, beforeTimeout.hand);
+  assert.equal(
+    g.view().events.at(-1).name,
+    beforeTimeout.players[beforeTimeout.actor].name,
+  );
+  assert.equal(
+    g.view().players[beforeTimeout.actor].lastAction.phase,
+    beforeTimeout.phase,
+  );
   const folded = g.view().actor;
   g.run(folded, "player_action", { action: "fold" });
   g.run(folded, "leave_room");

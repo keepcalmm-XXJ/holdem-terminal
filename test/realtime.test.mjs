@@ -223,6 +223,24 @@ test("realtime room/seat/token overrides cannot change authenticated player or s
   assert.equal(await client.closed, 1008);
 });
 
+test("realtime broadcasts chat without changing the action revision or deadline", async (t) => {
+  const { first, second, command, connect } = await fixture(t);
+  command(first, "set_ready", { ready: true });
+  command(second, "set_ready", { ready: true });
+  command(first, "start_game");
+  const client = await connect();
+  client.authenticate(first);
+  const before = await client.nextState();
+  const sent = command(second, "send_chat", { text: "hello" });
+  const after = await client.nextState(
+    (state) => state.chatRevision === before.chatRevision + 1,
+  );
+  assert.equal(after.revision, before.revision);
+  assert.equal(after.deadline, before.deadline);
+  assert.deepEqual(after.chat, sent.chat);
+  assert.equal(after.chat[0].name, "Bob");
+});
+
 test("realtime heartbeat refreshes presence but action messages are read-only and cannot mutate a hand", async (t) => {
   const { store, first, second, room, command, connect } = await fixture(t);
   command(first, "set_ready", { ready: true });

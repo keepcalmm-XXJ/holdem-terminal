@@ -33,7 +33,7 @@ export function createGameServer({
     const session = store.sessions.get(client.token);
     if (!session) return ws.close(4001, "Session expired");
     const room = store.rooms.get(session.room);
-    const signature = `${session.room}:${room?.revision}`;
+    const signature = `${session.room}:${room?.revision}:${room?.chatRevision}`;
     if (!force && client.signature === signature) return;
     if (ws.bufferedAmount > 256 * 1024) return ws.close(1013, "Slow client");
     const state = room
@@ -84,6 +84,7 @@ export function createGameServer({
             service: "codex-holdem",
             version: "0.2.0",
             status: "storage-recovery-required",
+            code: "STORAGE_FAULT",
           });
         return send(200, { service: "codex-holdem", version: "0.2.0" });
       }
@@ -123,8 +124,14 @@ export function createGameServer({
       )?.[1];
       send(200, store.execute(token, operation, input));
     } catch (error) {
-      const status = error.status || (error.code === "ENOENT" ? 503 : 400);
+      const storageFailure = ["COMMIT_UNCERTAIN", "STORAGE_FAULT"].includes(
+        error.code,
+      );
+      const status = storageFailure
+        ? 503
+        : error.status || (error.code === "ENOENT" ? 503 : 400);
       send(status, {
+        ...(storageFailure ? { code: error.code } : {}),
         error:
           error.code === "ENOENT"
             ? "请先运行 npm run build"

@@ -97,6 +97,52 @@ test("room recovery restores private cards, exact commitments and idempotency af
   assert.equal(g.view().history.length, 1);
 });
 
+test("chat revision and retry responses survive a durable restart", (t) => {
+  const g = fixture(t);
+  const before = g.view();
+  const input = { requestId: randomUUID(), text: "persisted chat" };
+  const sent = g.store.execute(g.tokens[0], "send_chat", input);
+  assert.equal(sent.revision, before.revision);
+  assert.equal(sent.chatRevision, 1);
+  g.restart();
+  const restored = g.view();
+  assert.equal(restored.chatRevision, 1);
+  assert.deepEqual(restored.chat, sent.chat);
+  assert.deepEqual(g.store.execute(g.tokens[0], "send_chat", input), sent);
+  assert.equal(g.view().chatRevision, 1);
+  const next = g.run(0, "send_chat", { text: "next chat" });
+  assert.equal(next.chatRevision, 2);
+  assert.equal(next.chat.length, 2);
+});
+
+test("failed chat writes roll back chat revision and suppress broadcasts", (t) => {
+  const g = fixture(t);
+  const before = g.view();
+  const disk = readFileSync(g.storagePath, "utf8");
+  let changes = 0;
+  g.store.on("change", () => changes++);
+  const save = g.store.storage.save.bind(g.store.storage);
+  g.store.storage.save = () => {
+    throw new Error("test save failure");
+  };
+  const input = { requestId: randomUUID(), text: "retryable chat" };
+  assert.throws(
+    () => g.store.execute(g.tokens[0], "send_chat", input),
+    /test save failure/,
+  );
+  const room = g.store.rooms.get(before.room);
+  assert.equal(room.revision, before.revision);
+  assert.equal(room.chatRevision, before.chatRevision);
+  assert.deepEqual(room.chat, before.chat);
+  assert.equal(changes, 0);
+  assert.equal(readFileSync(g.storagePath, "utf8"), disk);
+  g.store.storage.save = save;
+  const retried = g.store.execute(g.tokens[0], "send_chat", input);
+  assert.equal(retried.chatRevision, before.chatRevision + 1);
+  assert.equal(retried.chat.length, 1);
+  assert.equal(changes, 1);
+});
+
 test("failed durable writes roll back readiness and do not broadcast uncommitted changes", (t) => {
   const g = fixture(t);
   const before = g.view();
@@ -139,10 +185,10 @@ test("uncertain commit stops further operations instead of rolling back and cont
         revision: before.revision,
         ready: true,
       }),
-    /commit uncertain/,
+    { message: "commit uncertain", status: 503, code: "COMMIT_UNCERTAIN" },
   );
-  assert.throws(() => g.view(), /重启服务/);
-  assert.throws(() => g.store.tick(), /重启服务/);
+  assert.throws(() => g.view(), { status: 503, code: "STORAGE_FAULT" });
+  assert.throws(() => g.store.tick(), { status: 503, code: "STORAGE_FAULT" });
 });
 
 test("invalid room snapshot fails closed without replacing the original file", (t) => {
